@@ -1,0 +1,126 @@
+name: Check onkk Chrome Data
+
+on:
+  schedule:
+    # 每天北京时间 08:00 执行，每天执行 4 次（08:00 14:00 20:00 02:00）
+    # GitHub Actions 使用 UTC，这里是 UTC 00:00
+    - cron: "0 */6 * * *"
+
+  # 支持在 GitHub Actions 页面手动执行
+  workflow_dispatch:
+
+# 允许 GitHub Actions 修改仓库内容
+permissions:
+  contents: write
+
+jobs:
+  check-chrome:
+    runs-on: ubuntu-latest
+
+    steps:
+      # ==============================
+      # 1. 拉取当前仓库
+      # ==============================
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ==============================
+      # 2. 下载网页内容
+      # ==============================
+      - name: Fetch Chrome data
+        run: |
+          set -e
+
+          curl \
+            --location \
+            --fail \
+            --silent \
+            --show-error \
+            --connect-timeout 15 \
+            --max-time 60 \
+            https://onkk.cc/chrome/ \
+            -o /tmp/chrome.json
+
+          echo "网页内容："
+          cat /tmp/chrome.json
+
+      # ==============================
+      # 3. 检查并更新文件
+      # ==============================
+      - name: Check and update history
+        run: |
+          set -e
+
+          FILE="chrome_history.txt"
+          NEW_FILE="/tmp/chrome.json"
+
+          # 如果文件不存在，则创建
+          touch "$FILE"
+
+          # ------------------------------
+          # 将 JSON 压缩成单行
+          # ------------------------------
+          CONTENT=$(jq -c . "$NEW_FILE")
+
+          # ------------------------------
+          # 计算当前内容 SHA256
+          # ------------------------------
+          HASH=$(printf '%s' "$CONTENT" | sha256sum | awk '{print $1}')
+
+          # ------------------------------
+          # 获取当前 UTC 时间
+          # ------------------------------
+          DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+          echo "当前 SHA256: $HASH"
+
+          # ------------------------------
+          # 检查 SHA256 是否已经存在
+          # ------------------------------
+          if grep -Fq "SHA256: $HASH" "$FILE"; then
+            echo "======================================"
+            echo "内容已经存在"
+            echo "无需更新文件"
+            echo "无需提交 Git"
+            echo "======================================"
+            exit 0
+          fi
+
+          # ------------------------------
+          # 不存在：
+          # 将新内容插入文件第一行
+          # 旧内容全部保留
+          # ------------------------------
+          {
+            echo "$DATE | SHA256: $HASH | $CONTENT"
+            cat "$FILE"
+          } > "${FILE}.tmp"
+
+          mv "${FILE}.tmp" "$FILE"
+
+          echo "======================================"
+          echo "发现新的 Chrome 数据"
+          echo "已添加到 $FILE 第一行"
+          echo "旧内容全部保留"
+          echo "======================================"
+
+      # ==============================
+      # 4. 提交并推送
+      # ==============================
+      - name: Commit changes
+        run: |
+          set -e
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add chrome_history.txt
+
+          # 如果没有变化，不提交
+          if git diff --cached --quiet; then
+            echo "没有文件变化，不需要提交。"
+            exit 0
+          fi
+
+          git commit -m "Update Chrome data"
+          git push
